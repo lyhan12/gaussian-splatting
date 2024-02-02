@@ -23,6 +23,8 @@ from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
 
+from io import BytesIO
+
 class CameraInfo(NamedTuple):
     uid: int
     R: np.array
@@ -96,7 +98,16 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
 
         image_path = os.path.join(images_folder, os.path.basename(extr.name))
         image_name = os.path.basename(image_path).split(".")[0]
-        image = Image.open(image_path)
+
+        # pillow Image has a bug and it crashes when the number of images exceeds 1013
+        # reference : https://stackoverflow.com/questions/74041939/splitting-tiff-with-python-pil-oserror-24-too-many-open-files
+        if len(cam_infos) < 500:
+            image = Image.open(image_path)
+        else:
+            with open(image_path, "rb") as f:
+                data = f.read()
+            in_memory = BytesIO(data)
+            image = Image.open(in_memory)
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                               image_path=image_path, image_name=image_name, width=width, height=height)
