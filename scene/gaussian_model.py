@@ -58,21 +58,37 @@ class GaussianModel:
         self.spatial_lr_scale = 0
         self.setup_functions()
 
-    def capture(self):
-        return (
-            self.active_sh_degree,
-            self._xyz,
-            self._features_dc,
-            self._features_rest,
-            self._scaling,
-            self._rotation,
-            self._opacity,
-            self.max_radii2D,
-            self.xyz_gradient_accum,
-            self.denom,
-            self.optimizer.state_dict(),
-            self.spatial_lr_scale,
-        )
+    def capture(self, indices=None):
+        if indices is not None:
+            return (
+                self.active_sh_degree,
+                self._xyz[indices],
+                self._features_dc[indices],
+                self._features_rest[indices],
+                self._scaling[indices],
+                self._rotation[indices],
+                self._opacity[indices],
+                self.max_radii2D[indices],
+                self.xyz_gradient_accum[indices],
+                self.denom[indices],
+                self.optimizer.state_dict(),
+                self.spatial_lr_scale,
+            )
+        else:
+            return (
+                self.active_sh_degree,
+                self._xyz[indices],
+                self._features_dc[indices],
+                self._features_rest[indices],
+                self._scaling[indices],
+                self._rotation[indices],
+                self._opacity[indices],
+                self.max_radii2D[indices],
+                self.xyz_gradient_accum[indices],
+                self.denom[indices],
+                self.optimizer.state_dict(),
+                self.spatial_lr_scale,
+            )
     
     def restore(self, model_args, training_args):
         (self.active_sh_degree, 
@@ -188,7 +204,7 @@ class GaussianModel:
             l.append('rot_{}'.format(i))
         return l
 
-    def save_ply(self, path):
+    def save_ply(self, path, indices=None):
         mkdir_p(os.path.dirname(path))
 
         xyz = self._xyz.detach().cpu().numpy()
@@ -198,6 +214,15 @@ class GaussianModel:
         opacities = self._opacity.detach().cpu().numpy()
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
+
+        if indices is not None:
+            xyz = xyz[indices]
+            normals = normals[indices]
+            f_dc = f_dc[indices]
+            f_rest = f_rest[indices]
+            opacities = opacities[indices]
+            scale = scale[indices]
+            rotation = rotation[indices]
 
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
@@ -326,7 +351,7 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation):
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_max_radii2D):
         d = {"xyz": new_xyz,
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
@@ -342,9 +367,11 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
 
+        self.max_radii2D = torch.concat((self.max_radii2D, new_max_radii2D), dim=0)
+
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        # self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
         n_init_points = self.get_xyz.shape[0]
@@ -365,8 +392,9 @@ class GaussianModel:
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N,1,1)
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
+        new_max_radii2D = self.max_radii2D[selected_pts_mask].repeat(N)
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_max_radii2D)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -383,8 +411,9 @@ class GaussianModel:
         new_opacities = self._opacity[selected_pts_mask]
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
+        new_max_radii2D = self.max_radii2D[selected_pts_mask]
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_max_radii2D)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size):
         grads = self.xyz_gradient_accum / self.denom
@@ -395,9 +424,30 @@ class GaussianModel:
 
         prune_mask = (self.get_opacity < min_opacity).squeeze()
         if max_screen_size:
-            big_points_vs = self.max_radii2D > max_screen_size
+            # big_points_vs = self.max_radii2D > max_screen_size
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
-            prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
+            # prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
+            prune_mask = big_points_ws
+
+        # import ipdb
+        # ipdb.set_trace()
+
+
+        scales = self.get_scaling
+        scales = scales[:, 0] * scales[:, 1] * scales[:, 2]
+        scale_thres = 10*torch.median(scales)
+        scale_mask = scales > scale_thres
+        # print("Min, Median, Max Scales : ", torch.min(scales), torch.median(scales), scale_thres, torch.max(scales))
+
+        radii  = self.max_radii2D
+        radii_thres = 10*torch.median(radii)
+        # print("Min, Median, Max Radii : ", torch.min(radii), torch.median(radii), torch.max(radii))
+        # print("Max Screen Size : ", max_screen_size)
+        radii_mask = radii > radii_thres
+
+        # prune_mask = torch.logical_or(scale_mask, prune_mask)
+        # prune_mask = torch.logical_or(radii_mask, prune_mask)
+        
         self.prune_points(prune_mask)
 
         torch.cuda.empty_cache()

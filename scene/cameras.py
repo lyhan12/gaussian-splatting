@@ -67,7 +67,7 @@ class Camera(nn.Module):
         # original_image = Camera._load_and_process_image(self.image_path, (self.width, self.height), self.data_device)
         return original_image
 
-    def __init__(self, colmap_id, R, T, FoVx, FoVy, image_name, uid, image_path, resolution,
+    def __init__(self, colmap_id, R, T, FoVx, FoVy, image_name, uid, image_path, depth_path, resolution,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda"
                  ):
         super(Camera, self).__init__()
@@ -81,6 +81,7 @@ class Camera(nn.Module):
         self.image_name = image_name
 
         self.image_path = image_path
+        self.depth_path = depth_path
         self.image_width, self.image_height = resolution
 
         try:

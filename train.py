@@ -22,11 +22,23 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+import numpy as np
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
+
+
+import multiprocessing
+from multiprocessing import Pool
+multiprocessing.set_start_method('spawn', force=True)
+
+def read_image(cam):
+    img = cam.original_image
+    return img
+
+
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
@@ -34,6 +46,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
+
     if checkpoint:
         print("Loading checkpoint from " + checkpoint)
         (model_params, first_iter) = torch.load(checkpoint)
@@ -50,7 +63,34 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(opt.iterations), initial = first_iter, desc="Training progress")
     first_iter += 1
+
+    cache_size = 100
+    viewpoint_cam_cache = []
+    viewpoint_img_cache = []
+
     for iteration in range(first_iter, opt.iterations + 1):        
+        # print(sys.getsizeof(gaussians), len(gaussians.get_xyz))
+        # print("xyz size : ", sys.getsizeof(gaussians._xyz.storage()))
+        # print("features_dc size : ", sys.getsizeof(gaussians._features_dc.storage()))
+        # print("features_rest size : ", sys.getsizeof(gaussians._features_rest.storage()))
+        # print("scaling size : ", sys.getsizeof(gaussians._scaling.storage()))
+        # print("rotation size : ", sys.getsizeof(gaussians._rotation.storage()))
+        # print("opacity size : ", sys.getsizeof(gaussians._opacity.storage()))
+        # print("max_radii2D size : ", sys.getsizeof(gaussians.max_radii2D.storage()))
+        # print("xyz_gradient_accum size : ", sys.getsizeof(gaussians.xyz_gradient_accum.storage()))
+        # print("denom size : ", sys.getsizeof(gaussians.denom.storage()))
+        # print("total size : ",
+        #       sys.getsizeof(gaussians._xyz.storage()) +
+        #       sys.getsizeof(gaussians._features_dc.storage()) + 
+        #       sys.getsizeof(gaussians._features_rest.storage()) + 
+        #       sys.getsizeof(gaussians._scaling.storage()) + 
+        #       sys.getsizeof(gaussians._rotation.storage()) + 
+        #       sys.getsizeof(gaussians._opacity.storage()) + 
+        #       sys.getsizeof(gaussians.max_radii2D.storage()) + 
+        #       sys.getsizeof(gaussians.xyz_gradient_accum.storage()) +
+        #       sys.getsizeof(gaussians.denom.storage()))
+
+        # print("")
         if network_gui.conn == None:
             network_gui.try_connect()
         while network_gui.conn != None:
@@ -77,7 +117,22 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Pick a random Camera
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
-        viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+
+        # viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+        if len(viewpoint_cam_cache) == 0:
+            for _ in range(0, cache_size):
+                if not viewpoint_stack:
+                    viewpoint_stack = scene.getTrainCameras().copy()
+                cam_to_cache = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+                viewpoint_cam_cache.append(cam_to_cache)
+
+            with Pool(2) as pool:
+                viewpoint_img_cache = list(tqdm(pool.imap(read_image, viewpoint_cam_cache), desc="Reading Images", total=cache_size))
+
+            for i in tqdm(range(0, cache_size), desc="Transfering Images to GPU"):
+                viewpoint_img_cache = [image.to("cuda") for image in viewpoint_img_cache]
+
+        (viewpoint_cam, viewpoint_img) = viewpoint_cam_cache.pop(), viewpoint_img_cache.pop()
 
         # Render
         if (iteration - 1) == debug_from:
@@ -89,7 +144,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         # Loss
-        gt_image = viewpoint_cam.original_image.cuda()
+        gt_image = viewpoint_img
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         loss.backward()
@@ -113,9 +168,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             # Densification
             if iteration < opt.densify_until_iter:
+
+
+
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
@@ -123,6 +182,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
+
+                # import matplotlib.pyplot as plt
+                # scales = scales.cpu()
+                # logbins = np.geomspace(scales.min(), scales.max(), 1000)
+                # plt.figure(figsize=(30, 18))
+                # plt.hist(scales.cpu().numpy(), bins=logbins, alpha=0.5, label='Scales')
+                # plt.show()
+
 
             # Optimizer step
             if iteration < opt.iterations:
@@ -174,7 +241,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 for idx, viewpoint in enumerate(config['cameras']):
                     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
-                    if tb_writer and (idx < 5):
+                    if tb_writer and (idx < 10):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
                         if iteration == testing_iterations[0]:
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
@@ -198,7 +265,9 @@ if __name__ == "__main__":
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
-    default_intervals = [10, 100, 300] + list(range(500, 30000, 500))
+    default_intervals = [10] + list(range(500, 2000, 500)) \
+                             + list(range(2000, 10000, 1000)) \
+                             + list(range(10000, 60000, 1000))
     # default_intervals = [10, 100, 1000, 3000, 7_000, 30_000]
     parser.add_argument('--ip', type=str, default="127.0.0.1")
     parser.add_argument('--port', type=int, default=6009)

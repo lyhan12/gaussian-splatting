@@ -50,6 +50,7 @@ class ModelParams(ParamGroup):
         self._source_path = ""
         self._model_path = ""
         self._images = "images"
+        self._depths = None
         self._resolution = -1
         self._white_background = False
         self.data_device = "cuda"
@@ -84,7 +85,7 @@ class OptimizationParams(ParamGroup):
         self.densification_interval = 100
         self.opacity_reset_interval = 3000
         self.densify_from_iter = 500
-        self.densify_until_iter = 15_000
+        self.densify_until_iter = 15000
         self.densify_grad_threshold = 0.0002
         self.random_background = False
         super().__init__(parser, "Optimization Parameters")

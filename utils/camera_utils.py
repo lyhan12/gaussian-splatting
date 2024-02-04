@@ -41,7 +41,7 @@ def loadCam(args, id, cam_info, resolution_scale):
     # resized_image_rgb = PILtoTorch(cam_info.image, resolution)
 
     return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
-                  FoVx=cam_info.FovX, FoVy=cam_info.FovY, image_path=cam_info.image_path, resolution=resolution,
+                  FoVx=cam_info.FovX, FoVy=cam_info.FovY, image_path=cam_info.image_path, depth_path=cam_info.depth_path, resolution=resolution,
                   image_name=cam_info.image_name, uid=id, data_device=args.data_device)
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):
