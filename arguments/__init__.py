@@ -50,7 +50,7 @@ class ModelParams(ParamGroup):
         self._source_path = ""
         self._model_path = ""
         self._images = "images"
-        self._depths = None
+        self._depths = ""
         self._resolution = -1
         self._white_background = False
         self.data_device = "cuda"
@@ -88,6 +88,7 @@ class OptimizationParams(ParamGroup):
         self.densify_until_iter = 15000
         self.densify_grad_threshold = 0.0002
         self.random_background = False
+        self.depth_weight = 0.05
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

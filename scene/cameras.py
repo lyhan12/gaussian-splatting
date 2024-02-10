@@ -67,6 +67,10 @@ class Camera(nn.Module):
         # original_image = Camera._load_and_process_image(self.image_path, (self.width, self.height), self.data_device)
         return original_image
 
+    @property
+    def depth_image(self):
+        return torch.asarray(np.load(self.depth_path, allow_pickle=True)).to(self.data_device)
+
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image_name, uid, image_path, depth_path, resolution,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda"
                  ):

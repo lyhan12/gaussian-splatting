@@ -23,6 +23,13 @@ from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 import numpy as np
+
+from torchmetrics import PearsonCorrCoef
+from torchmetrics.functional.regression import pearson_corrcoef
+import torchvision.transforms as transforms
+from torchvision.transforms.functional import InterpolationMode
+
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -64,7 +71,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     progress_bar = tqdm(range(opt.iterations), initial = first_iter, desc="Training progress")
     first_iter += 1
 
-    cache_size = 100
+    cache_size = 500
     viewpoint_cam_cache = []
     viewpoint_img_cache = []
 
@@ -128,6 +135,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             with Pool(2) as pool:
                 viewpoint_img_cache = list(tqdm(pool.imap(read_image, viewpoint_cam_cache), desc="Reading Images", total=cache_size))
+            # for i in tqdm(range(0, cache_size), desc="Reading Images"):
+            #     viewpoint_img_cache = [read_image(image) for image in  viewpoint_cam_cache]
 
             for i in tqdm(range(0, cache_size), desc="Transfering Images to GPU"):
                 viewpoint_img_cache = [image.to("cuda") for image in viewpoint_img_cache]
@@ -141,12 +150,27 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         bg = torch.rand((3), device="cuda") if opt.random_background else background
 
         render_pkg = render(viewpoint_cam, gaussians, pipe, bg)
-        image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+        image, viewspace_point_tensor, visibility_filter, radii, depth, alpha = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"], render_pkg["depth"], render_pkg["alpha"]
 
         # Loss
         gt_image = viewpoint_img
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+
+        min_sz = min(depth[0].shape[0], depth[0].shape[1])
+        tgt_sz = 384
+        crop_transform = transforms.Compose([transforms.CenterCrop(min_sz), transforms.Resize(tgt_sz)])
+        render_depth = crop_transform(depth)
+        render_depth = render_depth.reshape(-1, 1).flatten()
+
+        prior_depth = viewpoint_cam.depth_image.detach().cuda()
+        prior_depth = prior_depth.reshape(-1, 1).flatten()
+
+        depth_loss = 1 - pearson_corrcoef(prior_depth, render_depth)
+        print("Loss : ", depth_loss, loss)
+        loss += args.depth_weight * depth_loss
+
+
         loss.backward()
 
         iter_end.record()

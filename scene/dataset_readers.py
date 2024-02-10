@@ -31,10 +31,8 @@ class CameraInfo(NamedTuple):
     T: np.array
     FovY: np.array
     FovX: np.array
-    image: np.array
     image_name: str
     image_path: str
-    depth: np.array
     depth_path: str
     width: int
     height: int
@@ -102,35 +100,33 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, depths_fold
         image_name = os.path.basename(image_path).split(".")[0]
 
         if depths_folder is not None:
-            depth_path = os.path.join(depths_folder, os.path.basename(extr.name).replace(".jpg", ".png"))
+            depth_path = os.path.join(depths_folder, image_name + "_depth.npy")
         else:
             depth_path = None
 
         # pillow Image has a bug and it crashes when the number of images exceeds 1013
         # reference : https://stackoverflow.com/questions/74041939/splitting-tiff-with-python-pil-oserror-24-too-many-open-files
-        if len(cam_infos) < 500:
-            image = Image.open(image_path)
-            if depths_folder is not None:
-                depth = Image.open(depth_path)
-            else:
-                depth = None
-        else:
-            with open(image_path, "rb") as f:
-                data = f.read()
-                in_memory = BytesIO(data)
-                image = Image.open(in_memory)
 
-            if depths_folder is not None:
-                with open(depth_path, "rb") as f:
-                    data = f.read()
-                    in_memory = BytesIO(data)
-                    depth = Image.open(in_memory)
-            else:
-                depth = None
+
+        # if len(cam_infos) < 500:
+        #     image = Image.open(image_path)
+        #     if depths_folder is not None:
+        #         depth = np.load(depth_path)
+        #     else:
+        #         depth = None
+        # else:
+        #     with open(image_path, "rb") as f:
+        #         data = f.read()
+        #         in_memory = BytesIO(data)
+        #         image = Image.open(in_memory)
+
+        #     if depths_folder is not None:
+        #         depth = np.load(depth_path)
+        #     else:
+        #         depth = None
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX,
-                              image_name=image_name, image=image, image_path=image_path,
-                              depth=depth, depth_path=depth_path,
+                              image_name=image_name, image_path=image_path, depth_path=depth_path,
                               width=width, height=height)
         cam_infos.append(cam_info)
     sys.stdout.write('\n')
