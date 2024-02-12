@@ -24,14 +24,13 @@ from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 import numpy as np
 
-from torchmetrics import PearsonCorrCoef
-from torchmetrics.functional.regression import pearson_corrcoef
+from torchmetrics.functional.regression.pearson import pearson_corrcoef
 import torchvision.transforms as transforms
 from torchvision.transforms.functional import InterpolationMode
 
 
 try:
-    from torch.utils.tensorboard import SummaryWriter
+    from torch.utils.tensorboard.writer import SummaryWriter
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
@@ -63,8 +62,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
-    iter_start = torch.cuda.Event(enable_timing = True)
-    iter_end = torch.cuda.Event(enable_timing = True)
+    iter_start = torch.cuda.streams.Event(enable_timing = True)
+    iter_end = torch.cuda.streams.Event(enable_timing = True)
 
     viewpoint_stack = None
     ema_loss_for_log = 0.0
@@ -167,7 +166,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         prior_depth = prior_depth.reshape(-1, 1).flatten()
 
         depth_loss = 1 - pearson_corrcoef(prior_depth, render_depth)
-        print("Loss : ", depth_loss, loss)
         loss += args.depth_weight * depth_loss
 
 
@@ -256,7 +254,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
     if iteration in testing_iterations:
         torch.cuda.empty_cache()
         validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()}, 
-                              {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
+                              {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(0, 2000, 200)]})
 
         for config in validation_configs:
             if config['cameras'] and len(config['cameras']) > 0:
@@ -265,7 +263,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 for idx, viewpoint in enumerate(config['cameras']):
                     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
-                    if tb_writer and (idx < 10):
+                    if tb_writer and (idx < 20):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
                         if iteration == testing_iterations[0]:
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
@@ -312,7 +310,7 @@ if __name__ == "__main__":
 
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
-    torch.autograd.set_detect_anomaly(args.detect_anomaly)
+    torch.autograd.anomaly_mode.set_detect_anomaly(args.detect_anomaly)
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
 
     # All done

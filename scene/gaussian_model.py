@@ -59,18 +59,18 @@ class GaussianModel:
         self.setup_functions()
 
     def capture(self, indices=None):
-        if indices is not None:
+        if indices is None:
             return (
                 self.active_sh_degree,
-                self._xyz[indices],
-                self._features_dc[indices],
-                self._features_rest[indices],
-                self._scaling[indices],
-                self._rotation[indices],
-                self._opacity[indices],
-                self.max_radii2D[indices],
-                self.xyz_gradient_accum[indices],
-                self.denom[indices],
+                self._xyz,
+                self._features_dc,
+                self._features_rest,
+                self._scaling,
+                self._rotation,
+                self._opacity,
+                self.max_radii2D,
+                self.xyz_gradient_accum,
+                self.denom,
                 self.optimizer.state_dict(),
                 self.spatial_lr_scale,
             )
@@ -124,7 +124,7 @@ class GaussianModel:
     def get_features(self):
         features_dc = self._features_dc
         features_rest = self._features_rest
-        return torch.cat((features_dc, features_rest), dim=1)
+        return torch.cat((features_dc, features_rest), dim=-2)
     
     @property
     def get_opacity(self):
@@ -374,6 +374,9 @@ class GaussianModel:
         # self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
+        # import ipdb
+        # ipdb.set_trace()
+
         n_init_points = self.get_xyz.shape[0]
         # Extract points that satisfy the gradient condition
         padded_grad = torch.zeros((n_init_points), device="cuda")
