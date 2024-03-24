@@ -28,6 +28,14 @@ try:
 except ImportError:
     TENSORBOARD_FOUND = False
 
+import multiprocessing
+from multiprocessing import Pool
+multiprocessing.set_start_method('spawn', force=True)
+
+def read_image(cam):
+    img = cam.original_image
+    return img
+
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
@@ -48,6 +56,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+
+    cache_size = 500
+    viewpoint_cam_cache = []
+    viewponit_img_cahce = []
+
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -76,6 +89,22 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+        if len(viewpoint_cam_cache) == 0:
+            for _ in range(0, cache_size):
+                if not viewpoint_stack:
+                    viewpoint_stack = scene.getTrainCameras().copy()
+                cam_to_cache = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+                viewpoint_cam_cache.append(cam_to_cache)
+
+            with Pool(2) as pool:
+                viewpoint_img_cache = list(tqdm(pool.imap(read_image, viewpoint_cam_cache), desc="Reading Images", total=cache_size))
+            # for i in tqdm(range(0, cache_size), desc="Reading Images"):
+            #     viewpoint_img_cache = [read_image(image) for image in  viewpoint_cam_cache]
+
+            for i in tqdm(range(0, cache_size), desc="Transfering Images to GPU"):
+                viewpoint_img_cache = [image.to("cuda") for image in viewpoint_img_cache]
+
+        (viewpoint_cam, viewpoint_img) = viewpoint_cam_cache.pop(), viewpoint_img_cache.pop()
 
         # Render
         if (iteration - 1) == debug_from:
@@ -87,7 +116,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         # Loss
-        gt_image = viewpoint_cam.original_image.cuda()
+        gt_image = viewpoint_img
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         loss.backward()
@@ -196,14 +225,17 @@ if __name__ == "__main__":
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
+    default_intervals = [10] + list(range(500, 2000, 500)) \
+                             + list(range(2000, 10000, 1000)) \
+                             + list(range(10000, 60000, 1000))
     parser.add_argument('--ip', type=str, default="127.0.0.1")
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=default_intervals)
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=default_intervals)
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=default_intervals)
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
