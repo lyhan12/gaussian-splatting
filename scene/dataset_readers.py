@@ -142,12 +142,33 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
+    path_test = "colmap_test"
+    images_test = "images_test"
+
+    cam_test_infos = None
+    if path_test is not None:
+        try:
+            cameras_val_extrinsic_file = os.path.join(path, path_test, "images.bin")
+            cameras_val_intrinsic_file = os.path.join(path, path_test, "cameras.bin")
+            cam_test_extrinsics = read_extrinsics_binary(cameras_val_extrinsic_file)
+            cam_test_intrinsics = read_intrinsics_binary(cameras_val_intrinsic_file)
+        except:
+            cameras_val_extrinsic_file = os.path.join(path, path_test, "images.txt")
+            cameras_val_intrinsic_file = os.path.join(path, path_test, "cameras.txt")
+            cam_test_extrinsics = read_extrinsics_text(cameras_val_extrinsic_file)
+            cam_test_intrinsics = read_intrinsics_text(cameras_val_intrinsic_file)
+
+        image_test_reading_dir = images_test
+        images_test_folder = os.path.join(path, image_test_reading_dir)
+        cam_test_infos = readColmapCameras(cam_extrinsics=cam_test_extrinsics, cam_intrinsics=cam_test_intrinsics, images_folder=images_test_folder)
+        cam_test_infos = sorted(cam_test_infos.copy(), key = lambda x : x.image_name)
+
     if eval:
         train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
         test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
     else:
         train_cam_infos = cam_infos
-        test_cam_infos = []
+        test_cam_infos = cam_test_infos
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
