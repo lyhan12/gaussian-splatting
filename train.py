@@ -22,6 +22,11 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+cmap = plt.get_cmap("viridis")
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -113,7 +118,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         bg = torch.rand((3), device="cuda") if opt.random_background else background
 
         render_pkg = render(viewpoint_cam, gaussians, pipe, bg)
-        image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+        image = render_pkg["render"]
+        viewspace_point_tensor = render_pkg["viewspace_points"]
+        visibility_filter = render_pkg["visibility_filter"]
+        radii = render_pkg["radii"]
+
+        alpha = render_pkg["alpha"]
+        depth = render_pkg["depth"]
+        depth_var = render_pkg["depth_var"]
+
 
         # Loss
         gt_image = viewpoint_img
@@ -200,9 +213,22 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 psnr_test = 0.0
                 for idx, viewpoint in enumerate(config['cameras']):
                     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
+                    alpha = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["alpha"], 0.0, 1.0)
+
+                    depth = renderFunc(viewpoint, scene.gaussians, *renderArgs)["depth"].permute(1, 2, 0)
+                    norm = Normalize(vmin=depth.min(), vmax=depth.max())
+                    depth = cmap(norm(depth.squeeze().cpu().numpy()))[..., :3]
+                    depth = torch.tensor(depth, device="cuda").permute(2, 0, 1)
+
+                    depth_var = renderFunc(viewpoint, scene.gaussians, *renderArgs)["depth_var"]
+                    depth_std = torch.sqrt(depth_var);
+                    depth_std = depth_std / 10.0
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if tb_writer and (idx < 20):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + "_view_{}/alpha".format(viewpoint.image_name), alpha[None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + "_view_{}/depth".format(viewpoint.image_name), depth[None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + "_view_{}/depth_std".format(viewpoint.image_name), depth_std[None], global_step=iteration)
                         if iteration == testing_iterations[0]:
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
                     l1_test += l1_loss(image, gt_image).mean().double()
