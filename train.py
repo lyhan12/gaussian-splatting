@@ -225,9 +225,10 @@ if __name__ == "__main__":
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
-    default_intervals = [10] + list(range(500, 2000, 500)) \
-                             + list(range(2000, 10000, 1000)) \
-                             + list(range(10000, 60000, 1000))
+    default_intervals = list([10, 7000, 30000])
+    # default_intervals = [10] + list(range(500, 2000, 500)) \
+    #                          + list(range(2000, 10000, 1000)) \
+    #                          + list(range(10000, 60000, 1000))
     parser.add_argument('--ip', type=str, default="127.0.0.1")
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
